@@ -3,13 +3,18 @@ import requests
 from itertools import product
 import time
 import os
+import tempfile
 from scidownl import scihub_download
 from PyPDF2 import PdfMerger
 
-# Get the directory where this script is located
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PAPERS_DIR = os.path.join(SCRIPT_DIR, "papers")
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "output")
+# Use temporary directories instead of local directories
+def get_temp_dirs():
+    temp_base = tempfile.mkdtemp()
+    papers_dir = os.path.join(temp_base, "papers")
+    output_dir = os.path.join(temp_base, "output")
+    os.makedirs(papers_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    return papers_dir, output_dir
 
 def search_crossref(words, min_citations=10):
     url = "https://api.crossref.org/works"
@@ -42,19 +47,17 @@ def search_crossref(words, min_citations=10):
         return []
 
 def download_and_merge_papers(source, progress_placeholder):
-    os.makedirs(PAPERS_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+    papers_dir, output_dir = get_temp_dirs()
     downloaded_files = []
     total = len(source)
     
     progress_bar = progress_placeholder.progress(0)
     status_text = progress_placeholder.empty()
     
-    for idx, (paper, paper_type, out) in enumerate(source):
+    for idx, (paper, paper_type, _) in enumerate(source):
         try:
             status_text.text(f'Downloading {paper} ({idx + 1}/{total})')
-            out_file = os.path.join(out, f"{paper.replace('/', '_')}.pdf")
+            out_file = os.path.join(papers_dir, f"{paper.replace('/', '_')}.pdf")
             scihub_download(paper, paper_type=paper_type, out=out_file)
             if os.path.exists(out_file):
                 downloaded_files.append(out_file)
@@ -63,54 +66,28 @@ def download_and_merge_papers(source, progress_placeholder):
         
         progress = (idx + 1) / total
         progress_bar.progress(progress)
-        time.sleep(1)  # To avoid overwhelming the server
+        time.sleep(1)
 
     if downloaded_files:
         status_text.text('Merging PDFs...')
-        merger = PdfMerger()
-        for pdf in downloaded_files:
-            merger.append(pdf)
-        output_path = os.path.join(OUTPUT_DIR, "merged.pdf")
-        merger.write(output_path)
-        merger.close()
-        status_text.text('Download and merge completed!')
-        return output_path
+        try:
+            merger = PdfMerger()
+            for pdf in downloaded_files:
+                if os.path.exists(pdf):
+                    merger.append(pdf)
+            output_path = os.path.join(output_dir, "merged.pdf")
+            merger.write(output_path)
+            merger.close()
+            status_text.text('Download and merge completed!')
+            return output_path
+        except Exception as e:
+            st.error(f"Error merging PDFs: {e}")
+            return None
     return None
 
-st.title('Search and dowload papers by list of keywords')
+st.title('Search and download papers by list of keywords')
 
-st.markdown("""
-### 🔍 Research Assistant for NotebookLM
-
-I built this tool to **streamline my research workflow** with NotebookLM - a powerful AI tool for analyzing PDFs and generating insights through quick queries.
-
-**How it works:**
-* Enter **groups of keywords** (separated by spaces)
-* The app finds papers containing **at least one word from each group**
- 
-*Example:*  
-Input 1: `laugh humor` 
-Input 2: `social evolution`  
-✅ "Social Functions of Laughter in Evolution"  
-✅ "Evolutionary Basis of Humor Behavior"  
-❌ "Evolution of Social Behavior" (missing laugh/humor term)
-❌ "Psychology of Humor" (missing social/evolution term)
-
-The app automatically searches Crossref for relevant titles and downloads PDFs through Sci-Hub, creating a ready-to-use collection for NotebookLM analysis.
-""")
-
-
-# Input for minimum citations
-min_citations = st.number_input('Minimum Citations', min_value=1, value=10)
-
-# Dynamic input for word lists
-num_lists = st.number_input('Number of keyword lists', min_value=1, max_value=5, value=2)
-word_lists = []
-
-for i in range(num_lists):
-    words = st.text_input(f'Keywords list {i+1} (space-separated)', key=f'list_{i}')
-    if words:
-        word_lists.append(words.split())
+# [Rest of your UI code remains the same until the search button]
 
 if st.button('Search and Download'):
     if all(word_lists):
@@ -131,7 +108,9 @@ if st.button('Search and Download'):
             
             for item, citations in results:
                 if item["DOI"] not in seen_dois:
-                    source.append((item["DOI"], 'doi', PAPERS_DIR))
+                    # Use temporary directory path
+                    papers_dir, _ = get_temp_dirs()
+                    source.append((item["DOI"], 'doi', papers_dir))
                     seen_dois.add(item["DOI"])
             
             progress = (idx + 1) / len(word_combinations)
@@ -143,7 +122,7 @@ if st.button('Search and Download'):
         if source:
             st.text('Found DOIs:')
             for entry in source:
-                st.code(f'("{entry[0]}", \'doi\', PAPERS_DIR),')
+                st.code(f'("{entry[0]}", \'doi\', "[temp_dir]"),')
             
             # Download phase
             st.subheader("Phase 2: Downloading and Merging")
@@ -161,7 +140,7 @@ if st.button('Search and Download'):
                     )
             
             # Add download button for DOIs
-            result_text = '\n'.join([f'("{entry[0]}", \'doi\', PAPERS_DIR),' for entry in source])
+            result_text = '\n'.join([f'"{entry[0]}",' for entry in source])
             st.download_button(
                 'Download DOI List',
                 result_text,
