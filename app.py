@@ -4,10 +4,19 @@ from itertools import product
 import time
 import os
 import tempfile
-from scidownl import scihub_download
+from scidownl.scihub import SciHub  # Import SciHub directly instead of using scihub_download
 from PyPDF2 import PdfMerger
 
-# Use temporary directories instead of local directories
+# Create a modified version of the download function that doesn't use SQLite
+def download_paper(doi, output_path):
+    sci = SciHub()
+    try:
+        result = sci.download(doi, output_path)
+        return result
+    except Exception as e:
+        st.error(f"Download error: {str(e)}")
+        return None
+
 def get_temp_dirs():
     temp_base = tempfile.mkdtemp()
     papers_dir = os.path.join(temp_base, "papers")
@@ -54,12 +63,13 @@ def download_and_merge_papers(source, progress_placeholder):
     progress_bar = progress_placeholder.progress(0)
     status_text = progress_placeholder.empty()
     
-    for idx, (paper, paper_type, _) in enumerate(source):
+    for idx, (paper, _, _) in enumerate(source):
         try:
             status_text.text(f'Downloading {paper} ({idx + 1}/{total})')
             out_file = os.path.join(papers_dir, f"{paper.replace('/', '_')}.pdf")
-            scihub_download(paper, paper_type=paper_type, out=out_file)
-            if os.path.exists(out_file):
+            # Use our modified download function instead of scihub_download
+            result = download_paper(paper, out_file)
+            if result and os.path.exists(out_file):
                 downloaded_files.append(out_file)
         except Exception as e:
             st.error(f"Failed to download {paper}: {e}")
@@ -87,7 +97,37 @@ def download_and_merge_papers(source, progress_placeholder):
 
 st.title('Search and download papers by list of keywords')
 
-# [Rest of your UI code remains the same until the search button]
+st.markdown("""
+### 🔍 Research Assistant for NotebookLM
+
+I built this tool to **streamline my research workflow** with NotebookLM - a powerful AI tool for analyzing PDFs and generating insights through quick queries.
+
+**How it works:**
+* Enter **groups of keywords** (separated by spaces)
+* The app finds papers containing **at least one word from each group**
+ 
+*Example:*  
+Input 1: `laugh humor` 
+Input 2: `social evolution`  
+✅ "Social Functions of Laughter in Evolution"  
+✅ "Evolutionary Basis of Humor Behavior"  
+❌ "Evolution of Social Behavior" (missing laugh/humor term)
+❌ "Psychology of Humor" (missing social/evolution term)
+
+The app automatically searches Crossref for relevant titles and downloads PDFs through Sci-Hub, creating a ready-to-use collection for NotebookLM analysis.
+""")
+
+# Input for minimum citations
+min_citations = st.number_input('Minimum Citations', min_value=1, value=10)
+
+# Dynamic input for word lists
+num_lists = st.number_input('Number of keyword lists', min_value=1, max_value=5, value=2)
+word_lists = []
+
+for i in range(num_lists):
+    words = st.text_input(f'Keywords list {i+1} (space-separated)', key=f'list_{i}')
+    if words:
+        word_lists.append(words.split())
 
 if st.button('Search and Download'):
     if all(word_lists):
@@ -108,7 +148,6 @@ if st.button('Search and Download'):
             
             for item, citations in results:
                 if item["DOI"] not in seen_dois:
-                    # Use temporary directory path
                     papers_dir, _ = get_temp_dirs()
                     source.append((item["DOI"], 'doi', papers_dir))
                     seen_dois.add(item["DOI"])
@@ -122,7 +161,7 @@ if st.button('Search and Download'):
         if source:
             st.text('Found DOIs:')
             for entry in source:
-                st.code(f'("{entry[0]}", \'doi\', "[temp_dir]"),')
+                st.code(f'"{entry[0]}",')
             
             # Download phase
             st.subheader("Phase 2: Downloading and Merging")
